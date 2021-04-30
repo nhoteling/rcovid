@@ -1,0 +1,777 @@
+---
+title: "Notebook: COVID Data"
+author: "Nathan Hoteling"
+date: "`r format(Sys.time(), '%B %d, %Y')`"
+output: html_document
+---
+
+<hr>
+<br>
+<br>
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(ggplot2)
+library(dplyr)
+library(lubridate)
+library(reshape2)
+library(stringr)
+library(RcppRoll)
+library(tidyr)
+library(readr)
+library(plotly)
+library(DT)
+library(scales)
+
+library(r2d3)
+library(jsonlite)
+
+fsave = TRUE
+
+# colors:
+# red (48% saturation):
+red48 <- "#c0514d"
+# red (60% saturation):
+red60 <- "#cf443f"
+# red (70% saturation):
+red70 <- "#db3933"
+
+orng1 <- "#e64d00"
+```
+
+
+
+
+```{r, include=FALSE}
+####################
+#  DATA URLs
+####################
+#
+# JHU data:
+# confirmed cases - WORLD
+#
+url_jhu_cfm <- "https://raw.githubusercontent.com/CSSEGISandData/COVID-19/master/csse_covid_19_data/csse_covid_19_time_series/time_series_covid19_confirmed_global.csv"
+#
+# JHU data:
+# deaths - WORLD
+#
+url_jhu_dth <- "https://raw.githubusercontent.com/CSSEGISandData/COVID-19/master/csse_covid_19_data/csse_covid_19_time_series/time_series_covid19_deaths_global.csv"
+#
+# JHU data:  NOT USED
+# daily totals
+# This looks like a subset of the data in the tables above...
+#
+url_jhu_dly <- "https://raw.githubusercontent.com/CSSEGISandData/COVID-19/master/csse_covid_19_data/csse_covid_19_daily_reports/04-08-2020.csv"
+#
+# JHU data:
+# confirmed cases - US STATES
+#
+url_jhu_uscfm <- "https://raw.githubusercontent.com/CSSEGISandData/COVID-19/master/csse_covid_19_data/csse_covid_19_time_series/time_series_covid19_confirmed_US.csv"
+#
+# JHU data:
+# deaths - US STATES
+#
+url_jhu_usdth <- "https://raw.githubusercontent.com/CSSEGISandData/COVID-19/master/csse_covid_19_data/csse_covid_19_time_series/time_series_covid19_deaths_US.csv"
+
+#
+#
+# Vaccination data from Our World in Data (OWID)
+# --> OWID pulls US vaccination data from CDC
+# --> OWID pulls international vaccination data from different sources; 
+#     url for each country is included in the data file
+#
+# US States
+url_owd_usvac <- "https://raw.githubusercontent.com/owid/covid-19-data/master/public/data/vaccinations/us_state_vaccinations.csv"
+# World
+url_owd_wdvac <- "https://raw.githubusercontent.com/owid/covid-19-data/master/public/data/vaccinations/vaccinations.csv"
+#
+#
+
+
+#
+# Other data available but not used in this analysis:
+#
+# Data from covidtracking.com -------------------------------------------------
+url_cvt_dly <- "https://covidtracking.com/api/v1/states/daily.csv"
+url_cvt_news <- "https://covidtracking.com/api/press"
+#
+#
+# Data from NYTimes via GitHub ------------------------------------------------
+# state data
+#
+url_nyt_ste <- "https://raw.githubusercontent.com/nytimes/covid-19-data/master/us-states.csv"
+# county data
+url_nyt_cty <- "https://raw.githubusercontent.com/nytimes/covid-19-data/master/us-counties.csv"
+
+```
+
+
+
+```{r, include=FALSE}
+# Note: fsave is set above
+#
+#
+# READ DATA
+#
+#
+df.cfmd <- read.table(url_jhu_cfm,sep=",",header=TRUE,fill=TRUE,quote="\"")  # jhu confirmed
+df.deth <- read.table(url_jhu_dth,sep=",",header=TRUE,fill=TRUE,quote="\"")  # jhu deaths
+
+df.uscfmd <- read.table(url_jhu_uscfm,sep=",",header=TRUE,fill=TRUE,quote="\"")  # jhu US confirmed
+df.usdeth <- read.table(url_jhu_usdth,sep=",",header=TRUE,fill=TRUE,quote="\"")  # jhu US deaths
+#df.daly <- read.table(url_jhu_dly,sep=",",header=TRUE,fill=TRUE,quote="\"")  # jhu daily xxx
+#df.stat <- read.table(url_nyt_ste,sep=",",header=TRUE,fill=TRUE,quote="\"")  # nyt state
+#df.cnty <- read.table(url_nyt_cty,sep=",",header=TRUE,fill=TRUE,quote="\"")  # nyt county
+
+
+#
+# Save the raw data
+#
+write_csv(df.cfmd, file="data/raw/jhu_cases.csv")
+write_csv(df.deth, file="data/raw/jhu_deaths.csv")
+#write_csv(df.daly, file="data/raw/jhu_daily.csv")
+write_csv(df.uscfmd, file="data/raw/jhu_UScases.csv")
+write_csv(df.usdeth, file="data/raw/jhu_USdeaths.csv")
+#
+# Vaccination data from OWID / CDC via GitHub
+#
+df.usvac <- read.table(url_owd_usvac, sep=",", header=TRUE,fill=TRUE,quote="\"") # cdc vacc
+df.wdvac <- read.table(url_owd_wdvac, sep=",", header=TRUE,fill=TRUE,quote="\"") # world vacc
+```
+
+
+
+```{r, include=FALSE, warning=FALSE}
+#
+#
+# DATA PROCESSING - WORLD
+#
+#
+#
+
+#
+#
+# World Population data
+#
+#
+# World population data downloaded from World Bank:
+# https://data.worldbank.org/indicator/SP.POP.TOTL
+#
+#fname_pop <- "data/API_SP.POP.TOTL_DS2_en_csv_v2_1976634/API_SP.POP.TOTL_DS2_en_csv_v2_1976634.csv"
+df.pop <- read.table("data/country_populations.csv", sep=",",skip=4, header=TRUE, fill=TRUE) %>% 
+  select(Country.Name, X2019) %>%
+  rename(Country.Region = Country.Name, population = X2019)
+df.tmp <- read.table("data/country_conversions.csv", header=TRUE, sep=",")
+for (i in 1:nrow(df.tmp)) {
+  df.pop$Country.Region[ df.pop$Country.Region == df.tmp$wb[i] ] <- df.tmp$jhu[i]
+}
+
+
+
+#
+#
+# World data from JHU
+#
+#
+# confirmed cases ----
+# there are columns for each date
+# and in each column is the cumulative
+# total number of cases
+#
+
+cases <- df.cfmd %>% 
+  pivot_longer(cols = starts_with("X"), names_to = "date", values_to = "cases") %>%
+  mutate(date = mdy(str_replace(date, pattern="X", replacement="")),
+         key = paste(Province.State,Country.Region,date,sep="-"))
+
+deaths <- df.deth %>%
+  pivot_longer(cols = starts_with("X"), names_to = "date", values_to = "deaths") %>%
+  mutate(date = mdy(str_replace(date, pattern="X", replacement="")),
+         key = paste(Province.State,Country.Region,date,sep="-"))
+
+jhu_combined <- cases %>% 
+  full_join(deaths[,c(6,7)], by="key") %>% 
+  select(-key) %>%
+  group_by(Country.Region, date) %>% 
+  summarise(cases=sum(cases), deaths=sum(deaths)) %>%
+  left_join(df.pop, by="Country.Region")
+
+countries <- unique(jhu_combined$Country.Region)
+ncountries <- length(countries)
+d <- lapply(seq_len(ncountries), function(i) {
+  print(paste(i, countries[i]))
+  df <- jhu_combined %>% filter(Country.Region == countries[i]) %>% arrange(date)
+  df$cases1 <- df$cases - dplyr::lag(df$cases)        # daily cases
+  df$deaths1 <- df$deaths - dplyr::lag(df$deaths)     # daily deaths
+  df$cases7 <- roll_meanr(df$cases1, n=7)              # 7-day mean cases
+  df$deaths7 <- roll_meanr(df$deaths1, n=7)            # 7-day mean deaths
+  df$Cases1 <- df$cases1/df$population
+  df$Deaths1 <- df$deaths1/df$population
+  df$Cases7 <- df$cases7/df$population
+  df$Deaths7 <- df$deaths7/df$population
+  return(df)
+})
+jhu <- do.call(rbind, d)
+
+#
+#  Filter out some countries so the resulting
+#  plots aren't quite so messy
+#
+trim <- 50  # keep only countries with top n population
+pop_trim <- jhu %>% 
+  group_by(Country.Region) %>% 
+  summarise(pop = max(population)) %>% 
+  arrange(desc(pop)) %>% 
+  top_n(trim)
+
+jhu_trim <- jhu %>% filter(Country.Region %in% pop_trim$Country.Region)
+
+
+#
+#
+# Save the processed data
+# jhu: World data
+# jhu_us: State data
+#
+if (fsave) { 
+  write_rds(jhu, file=paste("data/rds/covid-jhu-",Sys.Date(),".rds",sep="")) 
+  #write_rds(jhu_us, file=paste("data/rds/covid-jhu-us-",Sys.Date(),".rds",sep=""))
+  }
+```
+
+
+
+```{r, include=FALSE, warning=FALSE}
+#
+#
+# DATA PROCESSING - STATES
+#
+#
+#
+
+#
+# US population data downloaded from Census
+#
+df.census <- read.table("data/nst-est2020.csv", sep=",", header=TRUE, fill=TRUE) %>%
+  rename(region = REGION,
+         division = DIVISION,
+         id = STATE,
+         state = NAME,
+         population = POPESTIMATE2020) %>%
+  select(region, division, id, state, population)
+
+#
+#
+# US States data from JHU
+#
+#
+cases <- df.uscfmd %>% 
+  pivot_longer(cols = starts_with("X"), names_to = "date", values_to = "cases") %>%
+  mutate(date = mdy(str_replace(date, pattern="X", replacement=""))) %>%
+  group_by(Province_State, date) %>%
+  summarise(cases = sum(cases))
+
+deaths <- df.usdeth %>%
+  pivot_longer(cols = starts_with("X"), names_to = "date", values_to = "deaths") %>%
+  mutate(date = mdy(str_replace(date, pattern="X", replacement=""))) %>%
+  group_by(Province_State, date) %>%
+  summarise(deaths = sum(deaths))
+
+jhu_uscombined <- cases %>% 
+  full_join(deaths, by=c("Province_State","date")) %>% 
+  rename(state = Province_State) %>%
+  left_join(df.census, by="state")
+
+states <- unique(jhu_uscombined$state)
+nstates <- length(states)
+d <- lapply(seq_len(nstates), function(i) {
+  print(paste(i, states[i]))
+  df <- jhu_uscombined %>% filter(state == states[i]) %>% arrange(date)
+  df$cases1 <- df$cases - dplyr::lag(df$cases)        # daily cases
+  df$deaths1 <- df$deaths - dplyr::lag(df$deaths)     # daily deaths
+  df$cases7 <- roll_meanr(df$cases1, n=7)              # 7-day mean cases
+  df$deaths7 <- roll_meanr(df$deaths1, n=7)            # 7-day mean deaths
+  df$Cases1 <- df$cases1/df$population
+  df$Deaths1 <- df$deaths1/df$population
+  df$Cases7 <- df$cases7/df$population
+  df$Deaths7 <- df$deaths7/df$population
+  return(df)
+})
+jhu_us <- do.call(rbind, d)
+
+census_regions <- data.frame(region=c(1,2,3,4),
+                             name=c("Northeast","Midwest","South","West"))
+census_divisions <- data.frame(division=c(1,2,3,4,5,6,7,8,9),
+                               name=c("New England", "Middle Atlantic","East North Central",
+                                      "West North Central", "South Atlantic","East South Central",
+                                      "West South Central","Mountain","Pacific"))
+jhu_us$regionName <- census_regions$name[ match(jhu_us$region, census_regions[,1]) ]
+jhu_us$divisionName <- census_divisions$name[ match(jhu_us$division, census_divisions[,1]) ]
+
+
+#
+# Vaccination Data
+#
+#
+df.vaxUS <- df.usvac %>%
+  select(date, location, people_fully_vaccinated, people_fully_vaccinated_per_hundred) %>%
+  mutate(date = as.Date(date)) %>%
+  rename(state = location, 
+         Vaxd = people_fully_vaccinated_per_hundred,
+         vaxd = people_fully_vaccinated) %>%
+  left_join(df.census, by="state") %>%
+  mutate(Vax = 100*vaxd/population)
+df.vaxUS$regionName <- census_regions$name[ match(df.vaxUS$region, census_regions[,1]) ]
+df.vaxUS$divisionName <- census_divisions$name[ match(df.vaxUS$division, census_divisions[,1]) ]
+df.vaxUS <- df.vaxUS %>% filter(!is.na(regionName))
+#
+#
+# Save the processed data
+# jhu: World data
+# jhu_us: State data
+#
+if (fsave) { 
+  #write_rds(jhu, file=paste("data/rds/covid-jhu-",Sys.Date(),".rds",sep="")) 
+  write_rds(jhu_us, file=paste("data/rds/covid-jhu-us-",Sys.Date(),".rds",sep=""))
+  }
+```
+
+
+
+
+
+```{r, include=FALSE, warning=FALSE, echo=FALSE}
+#
+#  PLOTS - WORLD Data
+#
+#
+
+
+#selected_countries1 <- c("US", "Spain", "Italy", "United Kingdom", 
+#                        "Germany", "France", "Iran", "Canada", 
+#                        "India", "Ireland", "Austria", "Japan", 
+#                        "Korea, South", "China")
+selected_countries1 <- c("Spain", "Italy", "United Kingdom", 
+                        "Germany", "Brazil", "Iran","Sweden",  
+                        "Ireland", "Japan", "China")
+
+jhu_usa <- jhu_trim %>% filter(Country.Region %in% c("US"))
+
+x_buffer <- difftime(max(jhu_trim$date), min(jhu_trim$date), unit="weeks")*0.20
+df.world <- jhu_trim %>%
+  mutate(Cases7 = 1e5*Cases7,
+         Deaths7 = 1e5*Deaths7) %>%
+  rename(Country = Country.Region)
+
+df.usa <- jhu_usa %>%
+  mutate(Cases7 = 1e5*Cases7,
+         Deaths7 = 1e5*Deaths7) %>%
+  rename(Country = Country.Region)
+
+#
+# Daily cases per 100k, 7-day rolling average
+#
+p.Cases <- ggplot(df.world, aes(x=date,y=Cases7,group=Country)) +
+  geom_line(aes(text = paste(" Date:", format.Date(date, "%m/%d/%Y"), "<br>",
+                             "Country:", Country, "<br>",
+                             "Cases:", round(Cases7, digits=1), "per 100k"), sep=""),
+            color="grey50",size=0.2, alpha=0.5) +
+  geom_line(data=df.usa, color="grey99",size=1.2, alpha=1.0) +
+  geom_line(data=df.usa, aes(text = paste(" Date:", format.Date(date, "%m/%d/%Y"), "<br>",
+                             "Country:", Country, "<br>",
+                             "Cases:", round(Cases7, digits=1), "per 100k"), sep=""), 
+            color=orng1,size=0.8, alpha=0.8) +
+  geom_point(data=df.usa %>% filter(date == max(date)),
+             aes(x=date,y=Cases7),
+             pch=21, size=3, color="grey99",fill=orng1) +
+  #geom_text(data=df.usa %>% filter(date == max(date)), aes(label=Country, text=""),
+  #          color="grey99", size=5,hjust=-0.5, fontface="bold") +
+  geom_text(data=df.usa %>% filter(date == max(date)), 
+            aes(x=date+days(4), label=Country),
+            color=orng1, size=5,hjust=-0.2) +
+  labs(x="",y="", title = "Worldwide COVID cases per 100k population") +
+  scale_x_date(date_labels = "%b", limits=c(min(jhu_trim$date), max(jhu_trim$date)+days(7))) +
+  lims(y = c(0,1.2*max(df.world$Cases7))) +
+  theme_minimal() +
+  theme(legend.position = "none",
+        axis.text = element_text(size=10))
+
+
+#
+# Daily deaths per 100k, 7-day rolling average
+#
+p.Deaths <- ggplot(df.world, aes(x=date,y=Deaths7,group=Country)) +
+  geom_line(aes(text = paste(" Date:", format.Date(date, "%m/%d/%Y"), "<br>",
+                             "Country:", Country, "<br>",
+                             "Deaths:", round(Deaths7, digits=1), "per 100k"), sep=""),
+            color="grey50",size=0.2, alpha=0.5) +
+  geom_line(data=df.usa, color="grey99",size=1.2, alpha=1.0) +
+  geom_line(data=df.usa, aes(text = paste(" Date:", format.Date(date, "%m/%d/%Y"), "<br>",
+                             "Country:", Country, "<br>",
+                             "Deaths:", round(Deaths7, digits=1), "per 100k"), sep=""),
+            color=orng1,size=0.8, alpha=0.8) +
+  geom_point(data=df.usa %>% filter(date == max(date)),
+             pch=21, size=3, color="grey99",fill=orng1) +
+  #geom_text(data=jhu_usa %>% filter(date == max(date)),
+  #          aes(label=Country.Region),
+  #          color="grey99", size=5,hjust=-0.2, fontface="bold") +
+  geom_text(data=df.usa %>% filter(date == max(date)),
+            aes(x=date+days(4), label=Country),
+            color=orng1, size=5,hjust=-0.2) +
+  labs(x="Date",y="", title="Worldwide COVID deaths per 100k population") +
+  scale_x_date(date_labels = "%b", limits=c(min(jhu_trim$date), max(jhu_trim$date)+days(7))) +
+  lims(y = c(0,1.2*max(jhu_trim$Deaths7))) +
+  #theme_nh
+  theme_minimal() +
+  theme(legend.position = "none")
+```
+
+
+## World data {.tabset}
+
+The per capita numbers of cases and deaths for countries with the top 50 world populations are listed here.  The table shows the 7-day averages for the most recent date.
+
+### Cases
+
+```{r, include=TRUE, echo=FALSE, message=FALSE, warning=FALSE, fig.width=8, fig.height=5}
+# Draw plotly versions of the plots
+ggplotly(p.Cases, tooltip=c("text")) %>% style(textposition = "right")
+```
+
+### Deaths
+
+```{r, include=TRUE, echo=FALSE, message=FALSE, warning=FALSE, fig.width=8, fig.height=5}
+# Draw plotly versions of the plots
+ggplotly(p.Deaths, tooltip=c("text")) %>% style(textposition = "right")
+```
+
+### Table
+
+```{r, include=TRUE, echo=FALSE, message=FALSE, warning=FALSE}
+df.w <- df.world %>% 
+  filter(date == max(date)) %>%
+  select(Country, Cases7, Deaths7,cases7,deaths7) %>%
+  arrange(desc(Cases7))
+DT::datatable(df.w,
+              colnames = c("Country", "Cases per 100k", 
+                           "Deaths per 100k", "Cases", "Deaths")) %>%
+  formatRound(2,1) %>%
+  formatRound(3,2) %>%
+  formatRound(4:5,0)
+```
+
+
+
+
+
+```{r, include=FALSE, warning=FALSE, echo=FALSE, fig.width=8}
+#
+#  PLOTS - STATE Data
+#
+#
+
+x_buffer <- difftime(max(jhu_us$date), min(jhu_trim$date), unit="weeks")*0.20
+df.us <- jhu_us %>% filter(!is.na(regionName)) %>%
+  mutate(Cases7 = 1e5*Cases7,
+         Deaths7 = 1e5*Deaths7)
+
+df.va <- df.us %>% filter(state=="Virginia")
+
+
+#
+# Daily cases per 100k, 7-day rolling average
+#
+p.CasesUS <- ggplot(df.us, aes(x=date,y=Cases7,group=state)) +
+  geom_line(aes(text = paste(" Date:", format.Date(date, "%m/%d/%Y"), "<br>",
+                             "State:", state, "<br>",
+                             "Cases:", round(Cases7, digits=1), "per 100k"), sep=""),
+            color="grey50",size=0.2, alpha=0.5) +
+  geom_line(data=df.va, color="grey99",size=1.2, alpha=1.0) +
+  geom_line(data=df.va, aes(text = paste(" Date:", format.Date(date, "%m/%d/%Y"), "<br>",
+                             "State:", state, "<br>",
+                             "Cases:", round(Cases7, digits=1), "per 100k"), sep=""), 
+            color=orng1,size=0.8, alpha=0.8) +
+  geom_point(data=df.va %>% filter(date == max(date)),
+             aes(x=date,y=Cases7),
+             pch=21, size=3, color="grey99",fill=orng1) +
+  #geom_text(data=df.usa %>% filter(date == max(date)), aes(label=Country, text=""),
+  #          color="grey99", size=5,hjust=-0.5, fontface="bold") +
+  geom_text(data=df.va %>% filter(date == max(date)), 
+            aes(x=date+days(4), label="VA"),
+            color=orng1, size=5,hjust=-0.2) +
+  labs(x="",y="", title = "US COVID cases per 100k population") +
+  scale_x_date(date_labels = "%b", breaks=date_breaks("2 months"),
+               limits=c(min(jhu_trim$date), max(jhu_trim$date)+days(7))) +
+  lims(y = c(0,1.2*max(jhu_trim$Cases7))) +
+  theme_minimal() +
+  theme(legend.position = "none",
+        axis.text = element_text(size=10))
+
+
+#
+# Daily deaths per 100k, 7-day rolling average
+#
+p.DeathsUS <- ggplot(df.us, aes(x=date,y=Deaths7,group=state)) +
+  geom_line(aes(text = paste(" Date:", format.Date(date, "%m/%d/%Y"), "<br>",
+                             "State:", state, "<br>",
+                             "Deaths:", round(Deaths7, digits=1), "per 100k"), sep=""),
+            color="grey50",size=0.2, alpha=0.5) +
+  geom_line(data=df.va, color="grey99",size=1.2, alpha=1.0) +
+  geom_line(data=df.va, aes(text = paste(" Date:", format.Date(date, "%m/%d/%Y"), "<br>",
+                             "State:", state, "<br>",
+                             "Deaths:", round(Deaths7, digits=1), "per 100k"), sep=""), 
+            color=orng1,size=0.8, alpha=0.8) +
+  geom_point(data=df.va %>% filter(date == max(date)),
+             aes(x=date,y=Deaths7),
+             pch=21, size=3, color="grey99",fill=orng1) +
+  #geom_text(data=df.usa %>% filter(date == max(date)), aes(label=Country, text=""),
+  #          color="grey99", size=5,hjust=-0.5, fontface="bold") +
+  geom_text(data=df.va %>% filter(date == max(date)), 
+            aes(x=date+days(4), label="VA"),
+            color=orng1, size=5,hjust=-0.2) +
+  labs(x="",y="", title = "US COVID deaths per 100k population") +
+  scale_x_date(date_labels = "%b", limits=c(min(jhu_trim$date), max(jhu_trim$date)+days(7))) +
+  lims(y = c(0,1.2*max(jhu_trim$Deaths7))) +
+  theme_minimal() +
+  theme(legend.position = "none",
+        axis.text = element_text(size=10))
+```
+
+<br>
+<br>
+
+## USA data {.tabset}
+
+The per capita numbers of cases and deaths for all states are listed here.  The table shows the 7-day averages for the most recent date.
+
+### Cases
+
+```{r, include=TRUE, echo=FALSE, message=FALSE, warning=FALSE, fig.width=8, fig.height=4}
+ggplotly(p.CasesUS, tooltip=c("text")) %>% style(textposition = "right")
+```
+
+### Deaths
+
+```{r, include=TRUE, echo=FALSE, message=FALSE, warning=FALSE, fig.width=8, fig.height=4}
+ggplotly(p.DeathsUS, tooltip=c("text")) %>% style(textposition = "right")
+```
+
+### Table
+
+```{r, include=TRUE, echo=FALSE, message=FALSE, warning=FALSE}
+df.u <- df.us %>% 
+  filter(date == max(date)) %>%
+  select(state, regionName, Cases7, Deaths7,cases7,deaths7) %>%
+  arrange(desc(Cases7))
+DT::datatable(df.u,
+              colnames = c("State", "Region", "Cases per 100k", 
+                           "Deaths per 100k", "Cases", "Deaths")) %>%
+  formatRound(3,1) %>%
+  formatRound(4,2) %>%
+  formatRound(5:6,0)
+```
+
+
+
+```{r, include=FALSE, warning=FALSE, echo=FALSE, fig.width=8}
+#
+#  PLOTS - STATE Data
+#
+#
+
+
+#
+# Daily cases per 100k, 7-day rolling average
+#
+cols1 <- c("South"="#fbb4ae","West"="#b3cde3","Northeast"="#ccebc5","Midwest"="#decbe4")
+cols2 <- c("South"="#66c2a5","West"="#fc8d62","Northeast"="#8da0cb","Midwest"="#e78ac3")
+
+
+
+
+# Colored by Census Region
+p.CasesUS_misc <- ggplot(df.us, aes(x=date,y=Cases7,group=state)) +
+  geom_line(aes(color=regionName),size=0.3, alpha=0.7) +
+  scale_x_date(date_labels = "%b", breaks=date_breaks("2 months"),
+               limits=c(min(jhu_trim$date), max(jhu_trim$date))) +
+  scale_color_manual(name="Region",values=cols2) +
+  labs(x="",y="", title = "") +
+  lims(y = c(0,1.2*1e5*max(jhu_trim$Cases7))) +
+  #facet_wrap(~regionName, ncol=2) +
+  theme_minimal() +
+  theme(legend.position = c(0.1,0.85),
+        legend.background = element_rect(fill="grey100",
+                                  size=0.2, linetype="solid", 
+                                  colour ="grey75"),
+        strip.text = element_text(size=12, face="bold", color="grey20"),
+        axis.text = element_text(size=10))
+
+
+# Colored by Census Region
+p.DeathsUS_misc <- ggplot(df.us, aes(x=date,y=Deaths7,group=state)) +
+  geom_line(aes(color=regionName),size=0.3, alpha=0.7) +
+  scale_x_date(date_labels = "%b", breaks=date_breaks("2 months"),
+               limits=c(min(df.us$date), max(df.us$date))) +
+  scale_color_manual(name="Region",values=cols2) +
+  labs(x="",y="", title = "") +
+  lims(y = c(0,1.2*1e5*max(df.us$Deaths7))) +
+  #facet_wrap(~regionName, ncol=2) +
+  theme_minimal() +
+  theme(legend.position = c(0.1,0.85),
+        legend.background = element_rect(fill="grey100",
+                                  size=0.2, linetype="solid", 
+                                  colour ="grey75"),
+        strip.text = element_text(size=12, face="bold", color="grey20"),
+        axis.text = element_text(size=10))
+
+p.vax <- ggplot(df.vaxUS, aes(x=date, y=Vax, group=state)) +
+  geom_line(aes(color=regionName),size=0.3, alpha=0.7) +
+  scale_x_date(date_labels = "%b", breaks=date_breaks("2 months")  ) +#,
+               #limits=c(min(df.us$date), max(df.us$date))) +
+  scale_color_manual(name="Region",values=cols2) +
+  labs(x="", y="Percent Fully Vaccinated") +
+  lims(y=c(0,100)) +
+  theme_minimal() +
+  theme(legend.position = c(0.1,0.80),
+        legend.background = element_rect(fill="grey100",
+                                  size=0.2, linetype="solid", 
+                                  colour ="grey75"),
+        strip.text = element_text(size=12, face="bold", color="grey20"),
+        axis.text = element_text(size=10))
+```
+
+<br>
+<br>
+
+## Miscellaneous Plots
+
+<details>
+<summary style="size: 18px"> <b>US Cases by Census Region</b> </summary>
+```{r, include=TRUE, echo=FALSE, message=FALSE, warning=FALSE, fig.width=8, fig.height=4}
+p.CasesUS_misc
+```
+</details>
+
+<details>
+<summary style="size: 18px"> <b>US Deaths by Census Region</b> </summary>
+```{r, include=TRUE, echo=FALSE, message=FALSE, warning=FALSE, fig.width=8, fig.height=4}
+p.DeathsUS_misc
+```
+</details>
+
+<details>
+<summary style="size: 18px"> <b>US Vaccinations by Census Region</b> </summary>
+```{r, include=TRUE, echo=FALSE, message=FALSE, warning=FALSE, fig.width=8, fig.height=4}
+p.vax
+```
+</details>
+
+
+```{r, include=FALSE, warning=FALSE}
+#####################
+#                   #
+# Data for D3 plots #
+#                   #
+#####################
+
+# height & width for SVG
+h <- 400
+w <- 950
+
+
+## World data
+df.jhu <- jhu_trim %>% 
+  rename(country = Country.Region) %>%
+  mutate(cases = ifelse(is.na(cases), 0, cases),
+         cases1 = ifelse(is.na(cases1), 0, cases1),
+         cases7 = ifelse(is.na(cases7), 0, cases7),
+         Cases1 = ifelse(is.na(Cases1), 0, 1e5*Cases1),
+         Cases7 = ifelse(is.na(Cases7), 0, 1e5*Cases7),
+         deaths = ifelse(is.na(deaths), 0, deaths),
+         deaths1 = ifelse(is.na(deaths1), 0, deaths1),
+         deaths7 = ifelse(is.na(deaths7), 0, deaths7),
+         Deaths1 = ifelse(is.na(Deaths1), 0, 1e5*Deaths1),
+         Deaths7 = ifelse(is.na(Deaths7), 0, 1e5*Deaths7))
+
+## State data
+df.usjhu <- jhu_us %>% 
+  mutate(cases = ifelse(is.na(cases), 0, cases),
+         cases1 = ifelse(is.na(cases1), 0, cases1),
+         cases7 = ifelse(is.na(cases7), 0, cases7),
+         Cases1 = ifelse(is.na(Cases1), 0, 1e5*Cases1),
+         Cases7 = ifelse(is.na(Cases7), 0, 1e5*Cases7),
+         deaths = ifelse(is.na(deaths), 0, deaths),
+         deaths1 = ifelse(is.na(deaths1), 0, deaths1),
+         deaths7 = ifelse(is.na(deaths7), 0, deaths7),
+         Deaths1 = ifelse(is.na(Deaths1), 0, 1e5*Deaths1),
+         Deaths7 = ifelse(is.na(Deaths7), 0, 1e5*Deaths7))
+
+
+d.jhu <- jsonlite::toJSON(df.jhu)
+d.usjhu <- jsonlite::toJSON(df.usjhu)
+# Write json file for my pure d3.js version
+write(d.jhu,"data/rcovid_world.json")
+write(d.usjhu, "data/rcovid_state.json")
+```
+
+
+
+
+
+
+
+```{r, eval=FALSE, include=TRUE, echo=FALSE, warning=FALSE, message=FALSE}
+#
+#
+
+r2d3::r2d3(data=jsonlite::read_json("data/rcovid_world.json"),
+     dependencies=list("js/d3-tip.js", "js/d3-legend.js"), 
+     css="css/styles4.css",
+     script="js/covid-world-cases.js",
+     height = h,
+     width = w,
+     d3_version = 4,
+     elementId = "covid1")
+```
+
+
+
+
+
+```{r, eval=FALSE, include=TRUE, echo=FALSE, warning=FALSE, message=FALSE}
+#
+#
+
+r2d3::r2d3(data=jsonlite::read_json("data/rcovid_world.json"),
+     dependencies=list("js/d3-tip.js", "js/d3-legend.js"), 
+     css="css/styles4.css",
+     script="js/covid-world-deaths.js",
+     height = h,
+     width = w,
+     d3_version = 4)
+
+# height = 900
+# width = 800
+```
+
+<br>
+<br>
+
+## Data Sources
+
+COVID data on cases & deaths obtained from the following sources:  
+- Johns Hopkins [GitHub site](https://github.com/CSSEGISandData/COVID-19)  
+- Data from [covidtracking website](https://covidtracking.com/)  
+- NY Times [GitHub site](https://github.com/nytimes/covid-19-data)  
+
+COVID vaccine data from [Our World in Data](https://ourworldindata.org/covid-vaccinations):  
+- Our World in Data posts regular updates on their [GitHub site](https://github.com/owid/covid-19-data/tree/master/public/data)  
+- OWID data for US vaccines are pulled from [CDC Vaccine Data Tracker](https://covid.cdc.gov/covid-data-tracker/#vaccinations)  
+- OWID data for international locations aggregated from a variety of sources, as documented on their [GitHub page](https://github.com/owid/covid-19-data/tree/master/public/data)  
+
+Worldwide Population data from [World Bank](https://data.worldbank.org/indicator/SP.POP.TOTL)  
+US Population data from [Census Website](https://www2.census.gov/programs-surveys/popest/datasets/2010-2020/national/totals/)  
+
+<br>
+<br>
