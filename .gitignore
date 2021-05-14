@@ -5,6 +5,7 @@ archive
 References
 data/raw
 data/rds
+.DS_Store
 
 # Session Data files
 .RData
