@@ -1,2 +1,2 @@
 # rcovid
-Covid data notebook
+A COVID data notebook.
