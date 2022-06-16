@@ -765,8 +765,8 @@ COVID data on cases & deaths obtained from the following sources:
 - Data from [covidtracking website](https://covidtracking.com/)  
 - NY Times [GitHub site](https://github.com/nytimes/covid-19-data)  
 
-COVID vaccine data from [Our World in Data](https://ourworldindata.org/covid-vaccinations):  
-- Our World in Data posts regular updates on their [GitHub site](https://github.com/owid/covid-19-data/tree/master/public/data)  
+COVID vaccine data from Our World in Data [OWID](https://ourworldindata.org/covid-vaccinations):  
+- OWID posts regular updates on their [GitHub site](https://github.com/owid/covid-19-data/tree/master/public/data)  
 - OWID data for US vaccines are pulled from [CDC Vaccine Data Tracker](https://covid.cdc.gov/covid-data-tracker/#vaccinations)  
 - OWID data for international locations aggregated from a variety of sources, as documented on their [GitHub page](https://github.com/owid/covid-19-data/tree/master/public/data)  
 
